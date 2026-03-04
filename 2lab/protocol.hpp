@@ -9,6 +9,31 @@
 #include <iostream>  // для отладки (std::cerr, std::cout)
 
 
+#ifdef _WIN32
+    // Windows Sockets (WinSock)
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    // MSVC позволяет подключить библиотеку прямо из кода:
+    #pragma comment(lib, "ws2_32.lib")
+    
+    // На Windows нет socklen_t, поэтому определяем совместимый тип.
+    typedef int socklen_t;
+    // SHUT_RDWR на POSIX — константа для shutdown(sock, SHUT_RDWR).
+    // В Windows эквивалент называется SD_BOTH; приводим к одному имени.
+    #define SHUT_RDWR SD_BOTH
+    
+    // Windows иногда defines min/max как макросы — они мешают std::min/std::max.
+    #undef min
+    #undef max
+#else
+    // POSIX (Linux, macOS и т.п.)
+    #include <sys/socket.h> // socket(), connect(), send(), recv(), shutdown()
+    #include <arpa/inet.h>  // htons(), htonl(), inet_pton(), ntohl()
+    #include <unistd.h>     // close()
+    // На POSIX закрываем сокет через close(), но в коде используем closesocket — делаем alias.
+    #define closesocket close
+#endif
+
 
 // Максимальный размер полезной нагрузки (payload) в байтах.
 // Выделяем фиксированный буфер в структуре Message.
