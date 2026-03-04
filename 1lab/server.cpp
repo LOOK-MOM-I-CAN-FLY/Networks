@@ -1,9 +1,9 @@
-#include <iostream>
-#include <cstring>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
+#include <iostream>     // Для вывода в консоль (std::cout)
+#include <cstring>      // Для работы с массивами символов (хотя тут тоже почти не используется)
+#include <arpa/inet.h>  // Для сетевых преобразований: htons, ntohs, inet_ntoa
+#include <sys/socket.h> // Главная библиотека сокетов: socket, bind, recvfrom, sendto
+#include <netinet/in.h> // Сетевые константы и структуры: AF_INET, INADDR_ANY, sockaddr_in
+#include <unistd.h>     // Для функции close()
 
 int main(){
     int s=socket(AF_INET,SOCK_DGRAM,0);
