@@ -47,6 +47,7 @@ int main() {
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;                 // IPv4
     server_addr.sin_port = htons(8080);               // порт в сетевом порядке байтов
+//можно было в отдельную перменную вынести айпишник но мне лень 
     inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); // перевод IP из текста в бинарный вид
 
     // Подключаюсь к серверу. connect возвращает <0 при ошибке.
