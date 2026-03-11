@@ -106,7 +106,7 @@ inline bool send_message(int sock, uint8_t type, const std::string& payload = ""
         std::memcpy(msg.payload, payload.data(), payload_len);
     }
 
-    // Считаем, сколько байт всего будем отправлять: 4 байта length + 1 байт type + payload_len.
+    // Считаем, сколько байт всего будем отправлять: 4 байта length + 1 байт type + payload_len. Отправляем именно так чтобы не отправлять лишние нули
     size_t total_size = sizeof(msg.length) + 1 + payload_len;
     // Отправляем первый кусок структуры (length) + остальную часть (type+payload) одним буфером.
     // send_all сам позаботится о частичных отправках.
