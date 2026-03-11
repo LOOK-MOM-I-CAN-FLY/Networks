@@ -90,6 +90,7 @@ inline bool recv_all(int sock, void* data, size_t size) {
 inline bool send_message(int sock, uint8_t type, const std::string& payload = "") {
     // Подготавливаем структуру сообщения и отправляем только нужное количество байт.
     Message msg;
+    //функция для онуления памяти занимающей msg
     std::memset(&msg, 0, sizeof(msg)); // очищаем структуру, чтобы в payload были нули
 
     // payload_len — сколько байт из payload реально будем положить в msg.payload.
