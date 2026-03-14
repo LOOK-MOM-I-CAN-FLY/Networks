@@ -50,7 +50,7 @@ void remove_client(int sock) {
 }
 
 // --- Рабочий поток (Worker) ---
-void* worker_thread(void* arg) {
+void* worker_thread(void*) {
     while (true) {
         int client_sock = -1;
 
