@@ -51,7 +51,7 @@ enum MessageType : uint8_t {
 // даже если send() за один раз отправит только часть данных.
 inline bool send_all(int sock, const void* data, std::size_t size) {
     // Приводим исходный указатель к указателю на байты,
-    // потому что отправку удобнее вести как работу с сырым массивом байт.
+    // потому что нам для перемещения по памяти нужен указатель на фиксированный тип значений 
     const char* ptr = static_cast<const char*>(data);
 
     // Пока остались байты для отправки, продолжаем цикл.
@@ -59,7 +59,8 @@ inline bool send_all(int sock, const void* data, std::size_t size) {
         // ::send() — системный вызов POSIX.
         // Он может отправить не весь буфер сразу, особенно в TCP.
         // Поэтому мы не верим одному вызову и проверяем, сколько реально ушло.
-        ssize_t sent = ::send(sock, ptr, size, 0);
+        //ptr - указатель на буфер в памяти где лежат данные, которые я отправляю
+        ssize_t sent = ::send(sock, ptr, size, 0);//MSG_DONTWAIT - можно поставить вместо 0 для неблокирующей отправке например но нам это не надо 
 
         // Если send вернул 0 или отрицательное значение,
         // значит произошла ошибка или соединение закрылось.
@@ -88,7 +89,8 @@ inline bool recv_all(int sock, void* data, std::size_t size) {
     while (size > 0) {
         // ::recv() — системный вызов POSIX.
         // Он читает данные из TCP-стрима, но тоже может вернуть только часть.
-        ssize_t received = ::recv(sock, ptr, size, 0);
+        //ptr - куда recv должен записать принятые данные
+        ssize_t received = ::recv(sock, ptr, size, 0);// 0 -> MSG_PEEK позволяет "подсмотреть" данные, не удаляя их из системного буфера.
 
         // received <= 0 означает либо ошибку, либо закрытие соединения.
         if (received <= 0) {
@@ -115,7 +117,7 @@ inline bool send_message(int sock, uint8_t type, const std::string& payload = ""
     Message msg;
 
     // Очищаем всю структуру нулями.
-    // Это удобно, чтобы в памяти не оставалось мусора.
+    // sizeof(msg) - количество байт которые надо заполнить 0-ём
     std::memset(&msg, 0, sizeof(msg));
 
     // Берём длину строки payload, но ограничиваем её MAX_PAYLOAD.
