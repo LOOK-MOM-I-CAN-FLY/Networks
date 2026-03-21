@@ -1,9 +1,3 @@
-// protocol.hpp / protocol.cpp
-// Этот файл лучше хранить как заголовок, потому что здесь есть inline-функции,
-// структуры и перечисление, а не отдельная "тело-реализация" в классическом смысле.
-
-// ---- Только Linux / POSIX ----
-
 #include <cstdint>    // uint8_t, uint32_t
 #include <cstddef>    // std::size_t
 #include <string>     // std::string
