@@ -1,55 +1,49 @@
-#pragma once
-// Защита от многократного включения заголовка: если этот файл уже подключён,
-// препроцессор пропустит повторные включения.
+// protocol.hpp / protocol.cpp
+// Этот файл лучше хранить как заголовок, потому что здесь есть inline-функции,
+// структуры и перечисление, а не отдельная "тело-реализация" в классическом смысле.
 
-#include <cstdint>   // фиксированные целочисленные типы: uint32_t, uint8_t и т.п.
-#include <string>    // std::string
-#include <cstring>   // std::memset, std::memcpy
-#include <algorithm> // std::min
-#include <iostream>  // для отладки (std::cerr, std::cout)
+// ---- Только Linux / POSIX ----
 
+#include <cstdint>    // uint8_t, uint32_t
+#include <cstddef>    // std::size_t
+#include <string>     // std::string
+#include <cstring>    // std::memset, std::memcpy
+#include <algorithm>  // std::min
 
-#ifdef _WIN32
-    // Windows Sockets (WinSock)
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    // MSVC позволяет подключить библиотеку прямо из кода:
-    #pragma comment(lib, "ws2_32.lib")
-    
-    // На Windows нет socklen_t, поэтому определяем совместимый тип.
-    typedef int socklen_t;
-    // SHUT_RDWR на POSIX — константа для shutdown(sock, SHUT_RDWR).
-    // В Windows эквивалент называется SD_BOTH; приводим к одному имени.
-    #define SHUT_RDWR SD_BOTH
-    
-    // Windows иногда defines min/max как макросы — они мешают std::min/std::max.
-    #undef min
-    #undef max
-#else
-    // POSIX (Linux, macOS и т.п.)
-    #include <sys/socket.h> // socket(), connect(), send(), recv(), shutdown()
-    #include <arpa/inet.h>  // htons(), htonl(), inet_pton(), ntohl()
-    #include <unistd.h>     // close()
-    // На POSIX закрываем сокет через close(), но в коде используем closesocket — делаем alias.
-    #define closesocket close
-#endif
+// POSIX-сокеты: send(), recv()
+#include <sys/socket.h>
 
+// Преобразование порядка байтов: htonl(), ntohl()
+#include <arpa/inet.h>
 
-// Максимальный размер полезной нагрузки (payload) в байтах.
-// Выделяем фиксированный буфер в структуре Message.
-constexpr size_t MAX_PAYLOAD = 1024;
+// Максимальный размер полезной нагрузки в байтах.
+// Это именно лимит на данные, которые мы готовы передать в payload.
+constexpr std::size_t MAX_PAYLOAD = 1024;
 
+// Упаковка структуры без выравнивания.
+// Это нужно, чтобы поля в памяти шли подряд строго в том порядке,
+// в котором мы ожидаем их отправлять и принимать по сети.
 #pragma pack(push, 1)
-// Говорим компилятору упаковать структуру без паддинга (байт за байтом).
-// Это важно, чтобы поля имели предсказуемое смещение при записи/чтении по сети.
 struct Message {
-    uint32_t length;              // длина (в сетевом порядке байтов) = 1 (type) + payload_len
-    uint8_t  type;                // тип сообщения (MessageType)
-    char     payload[MAX_PAYLOAD];// буфер для строки/данных, не гарантируется '\0' пока не поставим
+    // Длина "хвоста" сообщения в сетевом порядке байт.
+    // Здесь хранится не вся структура, а только:
+    //   1 байт type + payload_len байт payload.
+    uint32_t length;
+
+    // Тип сообщения.
+    // Это один байт, потому что у нас enum MessageType основан на uint8_t.
+    uint8_t type;
+
+    // Буфер данных.
+    // +1 байт добавлен специально под завершающий '\0',
+    // чтобы удобно работать как со строкой внутри программы.
+    // В сеть этот нулевой байт не отправляется.
+    char payload[MAX_PAYLOAD + 1];
 };
 #pragma pack(pop)
 
-// Список типов сообщений — удобные имена для цифр.
+// Перечень типов сообщений.
+// Это просто удобные имена для чисел, чтобы не писать "1", "2", "3" и т.д.
 enum MessageType : uint8_t {
     MSG_HELLO   = 1,
     MSG_WELCOME = 2,
@@ -59,88 +53,159 @@ enum MessageType : uint8_t {
     MSG_BYE     = 6
 };
 
-// На Windows send/recv возвращают int; на POSIX ssize_t. Используем int для сравнения.
-inline bool send_all(int sock, const void* data, size_t size) {
-    // Отправляем данные полностью. send может отправить не все байты за один вызов,
-    // поэтому в цикле продолжаем, пока не уйдёт весь буфер.
+// Эта функция отправляет в сокет ровно size байт,
+// даже если send() за один раз отправит только часть данных.
+inline bool send_all(int sock, const void* data, std::size_t size) {
+    // Приводим исходный указатель к указателю на байты,
+    // потому что отправку удобнее вести как работу с сырым массивом байт.
     const char* ptr = static_cast<const char*>(data);
+
+    // Пока остались байты для отправки, продолжаем цикл.
     while (size > 0) {
-        int sent = send(sock, ptr, static_cast<int>(size), 0);
-        // sent <= 0 — ошибка или закрыто соединение.
-        if (sent <= 0) return false;
-        ptr += sent;      // сдвигаем указатель на количество отправленных байт
-        size -= sent;     // уменьшаем оставшийся размер
+        // ::send() — системный вызов POSIX.
+        // Он может отправить не весь буфер сразу, особенно в TCP.
+        // Поэтому мы не верим одному вызову и проверяем, сколько реально ушло.
+        ssize_t sent = ::send(sock, ptr, size, 0);
+
+        // Если send вернул 0 или отрицательное значение,
+        // значит произошла ошибка или соединение закрылось.
+        if (sent <= 0) {
+            return false;
+        }
+
+        // Сдвигаем указатель дальше на количество успешно отправленных байт.
+        ptr += static_cast<std::size_t>(sent);
+
+        // Уменьшаем оставшийся объём данных.
+        size -= static_cast<std::size_t>(sent);
     }
-    return true; // всё успешно отправлено
+
+    // Если дошли сюда, значит весь буфер ушёл успешно.
+    return true;
 }
 
-inline bool recv_all(int sock, void* data, size_t size) {
-    // Аналогично, recv может вернуть меньше запрошенных байт, поэтому читаем в цикле.
+// Эта функция читает из сокета ровно size байт.
+// recv() тоже может вернуть меньше, чем мы просим, поэтому нужен цикл.
+inline bool recv_all(int sock, void* data, std::size_t size) {
+    // Приводим буфер к байтовому указателю для поэтапного чтения.
     char* ptr = static_cast<char*>(data);
+
+    // Пока остались байты для чтения, продолжаем принимать данные.
     while (size > 0) {
-        int received = recv(sock, ptr, static_cast<int>(size), 0);
-        // received <= 0 — ошибка или соединение закрылось
-        if (received <= 0) return false;
-        ptr += received;  // сдвигаем указатель внутрь буфера
-        size -= received; // уменьшаем количество оставшихся байт
+        // ::recv() — системный вызов POSIX.
+        // Он читает данные из TCP-стрима, но тоже может вернуть только часть.
+        ssize_t received = ::recv(sock, ptr, size, 0);
+
+        // received <= 0 означает либо ошибку, либо закрытие соединения.
+        if (received <= 0) {
+            return false;
+        }
+
+        // Двигаем указатель на количество реально принятых байт.
+        ptr += static_cast<std::size_t>(received);
+
+        // Уменьшаем число оставшихся байт.
+        size -= static_cast<std::size_t>(received);
     }
-    return true; // прочитали всё, что просили
+
+    // Если цикл завершился, значит буфер заполнен полностью.
+    return true;
 }
 
+// Эта функция собирает сообщение и отправляет его целиком:
+// 1) длина
+// 2) тип
+// 3) полезная нагрузка
 inline bool send_message(int sock, uint8_t type, const std::string& payload = "") {
-    // Подготавливаем структуру сообщения и отправляем только нужное количество байт.
+    // Создаём структуру сообщения.
     Message msg;
-    //функция для онуления памяти занимающей msg
-    std::memset(&msg, 0, sizeof(msg)); // очищаем структуру, чтобы в payload были нули
 
-    // payload_len — сколько байт из payload реально будем положить в msg.payload.
-    // Ограничиваем до MAX_PAYLOAD, чтобы не выйти за буфер.
-    uint32_t payload_len = std::min<uint32_t>(static_cast<uint32_t>(payload.length()), static_cast<uint32_t>(MAX_PAYLOAD));
-    // В поле length записываем общее количество байт после поля length:
-    // 1 байт на type + payload_len байт на данные. Сохраняем в сетевом порядке (htonl).
+    // Очищаем всю структуру нулями.
+    // Это удобно, чтобы в памяти не оставалось мусора.
+    std::memset(&msg, 0, sizeof(msg));
+
+    // Берём длину строки payload, но ограничиваем её MAX_PAYLOAD.
+    // Если строка длиннее, мы её просто обрезаем.
+    // std::min нужен, чтобы не выйти за пределы буфера.
+    std::uint32_t payload_len = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(payload.size()),
+        static_cast<std::uint32_t>(MAX_PAYLOAD)
+    );
+
+    // length хранит число байт после самого поля length:
+    //   1 байт type + payload_len байт payload.
+    // htonl() переводит число в сетевой порядок байт.
     msg.length = htonl(1 + payload_len);
-    msg.type = type; // записываем тип
 
-    // Копируем payload_len байт из строки в msg.payload (если есть что копировать).
+    // Записываем тип сообщения.
+    msg.type = type;
+
+    // Если payload не пустой, копируем нужное количество байт в буфер.
+    // memcpy используется потому, что мы просто переносим сырой блок памяти.
     if (payload_len > 0) {
         std::memcpy(msg.payload, payload.data(), payload_len);
     }
 
-    // Считаем, сколько байт всего будем отправлять: 4 байта length + 1 байт type + payload_len. Отправляем именно так чтобы не отправлять лишние нули
-    size_t total_size = sizeof(msg.length) + 1 + payload_len;
-    // Отправляем первый кусок структуры (length) + остальную часть (type+payload) одним буфером.
-    // send_all сам позаботится о частичных отправках.
+    // Добавляем завершающий '\0', чтобы внутри программы payload можно было
+    // воспринимать как C-строку.
+    // Благодаря payload[MAX_PAYLOAD + 1] это безопасно.
+    msg.payload[payload_len] = '\0';
+
+    // В сеть мы отправляем только:
+    //   4 байта length
+    //   1 байт type
+    //   payload_len байт полезной нагрузки
+    //
+    // То есть нулевой байт НЕ отправляется.
+    std::size_t total_size = sizeof(msg.length) + 1 + payload_len;
+
+    // Отправляем всё через send_all(), чтобы не потерять часть сообщения.
     return send_all(sock, &msg, total_size);
 }
 
+// Эта функция принимает одно сообщение из сокета:
+// сначала length, потом type и payload.
 inline bool recv_message(int sock, Message& msg) {
-    // Принимаем сообщение: сначала читаем поле length (4 байта), потом читаем type+payload.
-    std::memset(&msg, 0, sizeof(msg)); // очищаем буфер для безопасности
+    // На всякий случай очищаем структуру.
+    std::memset(&msg, 0, sizeof(msg));
 
-    // Читаем ровно 4 байта длины (в сетевом порядке байтов).
-    if (!recv_all(sock, &msg.length, sizeof(msg.length))) return false;
-
-    // Переводим длину в порядок хоста (ntohl). len = 1 (type) + payload_len.
-    uint32_t len = ntohl(msg.length);
-
-    // Проверяем корректность: len должен быть >=1 (есть хотя бы type)
-    // и не превышать 1 + MAX_PAYLOAD (чтобы payload поместился).
-    if (len == 0 || len > 1 + MAX_PAYLOAD) return false;
-
-    // Читаем len байт сразу в поле type и далее в payload (т.к. структура упакована,
-    // type и payload идут подряд в памяти). recv_all гарантирует чтение всех len байт.
-    if (!recv_all(sock, &msg.type, len)) return false;
-
-    // Теперь ставим в payload завершающий нулевой символ для удобной работы как с C-строкой.
-    // Важно: len включает 1 байт type, поэтому payload длина = len - 1.
-    uint32_t payload_len = len - 1;
-    if (payload_len <= MAX_PAYLOAD) {
-        // записываем '\0' в позицию после реальных payload_len байт
-        msg.payload[payload_len] = '\0';
-    } else {
-        // на всякий случай: если payload_len вдруг больше буфера (не должно происходить),
-        // ставим последний байт буфера как нуль-терминатор.
-        msg.payload[MAX_PAYLOAD - 1] = '\0';
+    // Сначала читаем первые 4 байта — поле length.
+    // Это важно, потому что именно оно говорит, сколько ещё байт читать дальше.
+    if (!recv_all(sock, &msg.length, sizeof(msg.length))) {
+        return false;
     }
+
+    // Преобразуем длину из сетевого порядка байт в порядок хоста.
+    // Теперь len — это обычное число в формате текущей машины.
+    std::uint32_t len = ntohl(msg.length);
+
+    // len должен быть как минимум 1,
+    // потому что хотя бы один байт нужен под поле type.
+    // И он не должен превышать 1 + MAX_PAYLOAD.
+    if (len == 0 || len > 1 + MAX_PAYLOAD) {
+        return false;
+    }
+
+    // Читаем сразу len байт, начиная с поля type.
+    // Почему это работает:
+    // - структура упакована через #pragma pack(1)
+    // - поле type идёт сразу после length
+    // - дальше сразу лежит payload
+    //
+    // То есть мы фактически читаем "type + payload" одним блоком.
+    if (!recv_all(sock, &msg.type, len)) {
+        return false;
+    }
+
+    // Длина payload — это len - 1,
+    // потому что один байт из len уходит на type.
+    std::uint32_t payload_len = len - 1;
+
+    // Ставим завершающий '\0' в конец строки.
+    // Это делает payload удобным для вывода через std::cout
+    // и для любых C-строковых операций.
+    msg.payload[payload_len] = '\0';
+
+    // Если дошли сюда — сообщение принято корректно.
     return true;
 }
