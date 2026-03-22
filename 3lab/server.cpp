@@ -8,46 +8,49 @@
 
 #include "protocol.hpp"
 
-constexpr int THREAD_POOL_SIZE = 10;
-
+constexpr int THREAD_POOL_SIZE = 10;//размер пула рабочий потоков которые будут обрабатывать подключившихся клиентов
+//очередь куда главный поток складывает новые сокеты клиентов откуда потоки будут забирать клиентов 
 std::queue<int> client_queue;
-pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t  queue_cond  = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;//мьютекс для защиты очереди потому что туда могут и писать и читать одновременно несколько потоков
+pthread_cond_t  queue_cond  = PTHREAD_COND_INITIALIZER;// нужно чтобы если очередь была пустой воркер засыпал иначе пробуждался 
 
-std::vector<int> active_clients;
-pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-struct ClientInfo {
-    sockaddr_in addr{};
-};
-
+std::vector<int> active_clients;//список активных клиентов, нужен для рассылки сообщений всем подключённым клиентам
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;//и мьютекс для его защиты по той же причине что и для очереди
+//функция для красивого логирования, преобразует sockaddr_in -> IP:PORT
 std::string client_to_string(const sockaddr_in& addr) {
-    char ip[INET_ADDRSTRLEN] = {};
-    inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
-    return std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));
+    char ip[INET_ADDRSTRLEN] = {};//буфер под строку айпишника
+    inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));//превращает бинарный айпишник в текст
+    return std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));//ну и выводим просто строку
 }
-
+//удаляет клиента из списка активных и закрывает его сокет
 void remove_client(int sock) {
-    pthread_mutex_lock(&clients_mutex);
-    for (auto it = active_clients.begin(); it != active_clients.end(); ++it) {
+    pthread_mutex_lock(&clients_mutex);//захватываем мьютекст
+    for (auto it = active_clients.begin(); it != active_clients.end(); ++it) {//ищем пока не найдём
         if (*it == sock) {
             active_clients.erase(it);
             break;
         }
     }
-    pthread_mutex_unlock(&clients_mutex);
+    pthread_mutex_unlock(&clients_mutex);//отпускаем мьютекс
 
-    ::shutdown(sock, SHUT_RDWR);
-    ::close(sock);
+    ::shutdown(sock, SHUT_RDWR);//мягко сообщеаем ядру что больше не читаем и не пишем в этот сокет
+    ::close(sock);//закрываем дескриптор 
 }
-
+//посылаем сообщения всем активным клиентам не считая того кто это сообщение отправил
 void broadcast_message(const Message& msg, int exclude_sock = -1) {
-    pthread_mutex_lock(&clients_mutex);
+    pthread_mutex_lock(&clients_mutex);//захватываем мьютекст
+
+    //так как длина состоит из 1 + payload то мы вычитаем 1 
+    const std::size_t payload_len = static_cast<std::size_t>(ntohl(msg.length) - 1u);
+    //весь пакет состоит из 4 байт (длина) + 1 байт (типа) + n байт пейлод
+    const std::size_t total_size = sizeof(msg.length) + 1u + payload_len;
     for (int client_sock : active_clients) {
-        if (client_sock == exclude_sock) continue;
-        send_all(client_sock, &msg, sizeof(msg.length) + 1u + (ntohl(msg.length) - 1u));
+        if (client_sock == exclude_sock) {//наткнувшись на себя же скипаем
+            continue;
+        }
+        send_all(client_sock, &msg, total_size);
     }
-    pthread_mutex_unlock(&clients_mutex);
+    pthread_mutex_unlock(&clients_mutex);//отпускаем мьютекс
 }
 
 void* worker_thread(void*) {
