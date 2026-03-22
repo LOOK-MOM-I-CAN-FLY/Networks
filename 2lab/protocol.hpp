@@ -4,11 +4,18 @@
 #include <cstring>    // std::memset, std::memcpy
 #include <algorithm>  // std::min
 
+
 // POSIX-сокеты: send(), recv()
 #include <sys/socket.h>
 
 // Преобразование порядка байтов: htonl(), ntohl()
 #include <arpa/inet.h>
+
+
+//сначала длина,
+//потом тип,
+//потом данные.
+
 
 // Максимальный размер полезной нагрузки в байтах.
 // Это именно лимит на данные, которые мы готовы передать в payload.
@@ -22,7 +29,7 @@ struct Message {
     // Длина "хвоста" сообщения в сетевом порядке байт.
     // Здесь хранится не вся структура, а только:
     //   1 байт type + payload_len байт payload.
-    uint32_t length;
+    uint32_t length;//НУ и по сути htonl работает именно с uint23_t 
 
     // Тип сообщения.
     // Это один байт, потому что у нас enum MessageType основан на uint8_t.
@@ -49,6 +56,8 @@ enum MessageType : uint8_t {
 
 // Эта функция отправляет в сокет ровно size байт,
 // даже если send() за один раз отправит только часть данных.
+//ПРИМЕР
+//Падаем в send_all data = &msg, size = 7 - то есть надо 7 байтов отправить подряд в буфере они выглядят условно так: [ length(4 bytes) ][ type(1 byte) ][ 'H' ][ 'i' ] = 00 00 00 03 03 48 69
 inline bool send_all(int sock, const void* data, std::size_t size) {
     // Приводим исходный указатель к указателю на байты,
     // потому что нам для перемещения по памяти нужен указатель на фиксированный тип значений 
@@ -60,6 +69,8 @@ inline bool send_all(int sock, const void* data, std::size_t size) {
         // Он может отправить не весь буфер сразу, особенно в TCP.
         // Поэтому мы не верим одному вызову и проверяем, сколько реально ушло.
         //ptr - указатель на буфер в памяти где лежат данные, которые я отправляю
+        //ПРИМЕР
+        //size = 7 (может отправить и 7 а может только 4)
         ssize_t sent = ::send(sock, ptr, size, 0);//MSG_DONTWAIT - можно поставить вместо 0 для неблокирующей отправке например но нам это не надо 
 
         // Если send вернул 0 или отрицательное значение,
@@ -81,6 +92,8 @@ inline bool send_all(int sock, const void* data, std::size_t size) {
 
 // Эта функция читает из сокета ровно size байт.
 // recv() тоже может вернуть меньше, чем мы просим, поэтому нужен цикл.
+//
+//Пришло сообщение размером 4 = size
 inline bool recv_all(int sock, void* data, std::size_t size) {
     // Приводим буфер к байтовому указателю для поэтапного чтения.
     char* ptr = static_cast<char*>(data);
@@ -112,6 +125,7 @@ inline bool recv_all(int sock, void* data, std::size_t size) {
 // 1) длина
 // 2) тип
 // 3) полезная нагрузка
+//Пусть для примера мы отправляем "Hi" - это type = 3
 inline bool send_message(int sock, uint8_t type, const std::string& payload = "") {
     // Создаём структуру сообщения.
     Message msg;
@@ -123,23 +137,24 @@ inline bool send_message(int sock, uint8_t type, const std::string& payload = ""
     // Берём длину строки payload, но ограничиваем её MAX_PAYLOAD.
     // Если строка длиннее, мы её просто обрезаем.
     // std::min нужен, чтобы не выйти за пределы буфера.
+    //У Hi длина = 2 
     std::uint32_t payload_len = std::min<std::uint32_t>(
         static_cast<std::uint32_t>(payload.size()),
         static_cast<std::uint32_t>(MAX_PAYLOAD)
     );
 
-    // length хранит число байт после самого поля length:
     //   1 байт type + payload_len байт payload.
-    // htonl() переводит число в сетевой порядок байт.
-    msg.length = htonl(1 + payload_len);
+    // htonl() переводит 32 битное целое число в сетевой порядок байт Big Endian
+    //К Hi = 2 прибавляет 1 байт = типу сообщения 
+    msg.length = htonl(1 + payload_len); // 3 - на пк оно хранится в памяти по разному, а в сетях мы должны единообразно отправлять сообщения 
 
     // Записываем тип сообщения.
-    msg.type = type;
+    msg.type = type; // будет байт 03 - так как Hi - MSG_TEXT
 
     // Если payload не пустой, копируем нужное количество байт в буфер.
-    // memcpy используется потому, что мы просто переносим сырой блок памяти.
+    // memcpy используется потому, что мы просто переносим массив байт не важно это char или uint8_t а нам нужно перенести последовательность битов как есть
     if (payload_len > 0) {
-        std::memcpy(msg.payload, payload.data(), payload_len);
+        std::memcpy(msg.payload, payload.data(), payload_len);//заполняем нашу структуру 
     }
 
     // Добавляем завершающий '\0', чтобы внутри программы payload можно было
@@ -148,12 +163,12 @@ inline bool send_message(int sock, uint8_t type, const std::string& payload = ""
     msg.payload[payload_len] = '\0';
 
     // В сеть мы отправляем только:
-    //   4 байта length
+    //   4 байта length так как число 3 в памяти резервируется 4 байтами
     //   1 байт type
     //   payload_len байт полезной нагрузки
     //
     // То есть нулевой байт НЕ отправляется.
-    std::size_t total_size = sizeof(msg.length) + 1 + payload_len;
+    std::size_t total_size = sizeof(msg.length) + 1 + payload_len;// итого на примере Hi в сеть уйдёт 7 байтов (2 + 1 = 3 = 4 байта) + 1 тип + 2 длина сообщения   
 
     // Отправляем всё через send_all(), чтобы не потерять часть сообщения.
     return send_all(sock, &msg, total_size);
@@ -161,19 +176,21 @@ inline bool send_message(int sock, uint8_t type, const std::string& payload = ""
 
 // Эта функция принимает одно сообщение из сокета:
 // сначала length, потом type и payload.
+//ПРИМЕР
+//00 00 00 03 03 48 69 - пришло. Длина 3. тип 3, сообщение 48 69 = Hi
 inline bool recv_message(int sock, Message& msg) {
-    // На всякий случай очищаем структуру.
+    // На всякий случай очищаем структуру перед чтением
     std::memset(&msg, 0, sizeof(msg));
 
     // Сначала читаем первые 4 байта — поле length.
     // Это важно, потому что именно оно говорит, сколько ещё байт читать дальше.
-    if (!recv_all(sock, &msg.length, sizeof(msg.length))) {
+    if (!recv_all(sock, &msg.length, sizeof(msg.length))) {//прочитали 3 байта = msg.length
         return false;
     }
 
     // Преобразуем длину из сетевого порядка байт в порядок хоста.
     // Теперь len — это обычное число в формате текущей машины.
-    std::uint32_t len = ntohl(msg.length);
+    std::uint32_t len = ntohl(msg.length);//len = 3 - человеческий вид
 
     // len должен быть как минимум 1,
     // потому что хотя бы один байт нужен под поле type.
@@ -187,15 +204,16 @@ inline bool recv_message(int sock, Message& msg) {
     // - структура упакована через #pragma pack(1)
     // - поле type идёт сразу после length
     // - дальше сразу лежит payload
-    //
     // То есть мы фактически читаем "type + payload" одним блоком.
+    //
+    //
     if (!recv_all(sock, &msg.type, len)) {
         return false;
     }
 
     // Длина payload — это len - 1,
     // потому что один байт из len уходит на type.
-    std::uint32_t payload_len = len - 1;
+    std::uint32_t payload_len = len - 1; // осталась длина = 2 под Hi
 
     // Ставим завершающий '\0' в конец строки.
     // Это делает payload удобным для вывода через std::cout
