@@ -100,24 +100,26 @@ void* worker_thread(void*) {//Она берет клиента из очеред
 
     return nullptr;
 }
-
+//подготовка TCP-сервера и запуск пула потоков
 int main() {
-    int server_sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    int server_sock = ::socket(AF_INET, SOCK_STREAM, 0);//AF_INET — работаем через IPv4, SOCK_STREAM — используем протокол TCP         |  :: - означает использование системной функции
     if (server_sock < 0) {
-        std::perror("socket");
+        std::perror("socket");//если вернулось -1 значит ОС не смогла выделить ресурсы для создания сокета 
         return 1;
     }
 
     int opt = 1;
-    ::setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    //REUSEADDR - разрешает повторное использование локального адреса и порта сразу после закрытия программы
+    ::setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));//крч по сути я говорю ос'ке: Если я перезапущу сервер даь мне занять этот порт немедленно и не заставляй меня ждать пару минут (30 - 120 сек)
 
-    sockaddr_in server_addr{};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(SERVER_PORT);
-
-    if (::bind(server_sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
-        std::perror("bind");
+    sockaddr_in server_addr{};//создаём структуру куда сложем данные о адресе 
+    server_addr.sin_family = AF_INET;//IPv4
+    server_addr.sin_addr.s_addr = INADDR_ANY;// сервак слушает все порты компа
+    server_addr.sin_port = htons(SERVER_PORT);//число в сетевой формат
+    //reinterpret_cast<sockaddr*>(&server_addr) - нужно так сделать потому что ::bind работает и с IPv6 поэтому надо к общему виду
+    if (::bind(server_sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {//по сути привязываем наш номер телефона к конкретной линии
+        //Мы говорим ядру: я хочу чтобы все данные приходящие на указанный мной порт и IP отправлялись в мой сокет server_sock
+        std::perror("bind");//< 0 — если функция вернула отрицательное число значит порт занят или нет прав доступа
         ::close(server_sock);
         return 1;
     }
