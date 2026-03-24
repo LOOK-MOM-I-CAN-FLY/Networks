@@ -23,7 +23,7 @@ std::string client_to_string(const sockaddr_in& addr) {
     return std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));//ну и выводим просто строку
 }
 //удаляет клиента из списка активных и закрывает его сокет
-void remove_client(int sock) {
+void (int sock) {
     pthread_mutex_lock(&clients_mutex);//захватываем мьютекст
     for (auto it = active_clients.begin(); it != active_clients.end(); ++it) {//ищем пока не найдём
         if (*it == sock) {
@@ -53,44 +53,44 @@ void broadcast_message(const Message& msg, int exclude_sock = -1) {
     pthread_mutex_unlock(&clients_mutex);//отпускаем мьютекс
 }
 
-void* worker_thread(void*) {
+void* worker_thread(void*) {//Она берет клиента из очереди, проверяет его и обслуживает до момента отключения.
     while (true) {
-        int client_sock = -1;
+        int client_sock = -1;//нужно для хранения дескриптора текущего клиента 
 
-        pthread_mutex_lock(&queue_mutex);
-        while (client_queue.empty()) {
-            pthread_cond_wait(&queue_cond, &queue_mutex);
+        pthread_mutex_lock(&queue_mutex);//захватываем мьютекс так как работает с очередью
+        while (client_queue.empty()) {//будем ждать если очередь пуста
+            pthread_cond_wait(&queue_cond, &queue_mutex);//поток засыпает и освобождает мьютекс. Когда главный поток добавит клиента он подаст сигнал и этот поток проснется снова захватив мьютекс
         }
-        client_sock = client_queue.front();
-        client_queue.pop();
-        pthread_mutex_unlock(&queue_mutex);
+        client_sock = client_queue.front();//берём сокет первого клиента в очереди
+        client_queue.pop();//ну и убираем клиента из очереди типо обслужили
+        pthread_mutex_unlock(&queue_mutex);//отпускаем мьютекс
 
         Message msg;
-        if (!recv_message(client_sock, msg) || msg.type != MSG_HELLO) {
+        if (!recv_message(client_sock, msg) || msg.type != MSG_HELLO) {//если не получилось получить сообщение от клиента или клиент не прислал hello то бб 
             remove_client(client_sock);
             continue;
         }
 
-        std::cout << "New client said HELLO: " << msg.payload << "\n";
+        std::cout << "New client said HELLO: " << msg.payload << "\n";//вывод в консоль текст приветствия от клиента 
 
-        send_message(client_sock, MSG_WELCOME, "Welcome to the server!");
+        send_message(client_sock, MSG_WELCOME, "Welcome to the server!");//и посылаем ответное сообщение клиенту 
 
         pthread_mutex_lock(&clients_mutex);
-        active_clients.push_back(client_sock);
+        active_clients.push_back(client_sock);//добавляем новоиспечённого клиента к активным чтобы с ним работать дальше 
         pthread_mutex_unlock(&clients_mutex);
 
-        while (true) {
-            if (!recv_message(client_sock, msg)) {
+        while (true) {//цикл жизни конкретного соединения
+            if (!recv_message(client_sock, msg)) {//получаем данные, если клиент отключился или произошла ошибка чтения — выходим из цикла
                 break;
             }
 
             if (msg.type == MSG_TEXT) {
-                std::cout << "Broadcasting: " << msg.payload << "\n";
+                std::cout << "Broadcasting: " << msg.payload << "\n";//если он прислал сообщение то выводим его всем
                 broadcast_message(msg);
             } else if (msg.type == MSG_PING) {
-                send_message(client_sock, MSG_PONG, "");
+                send_message(client_sock, MSG_PONG, "");//иначе если он прислал пинг, то мы ЕМУ посылаем понг
             } else if (msg.type == MSG_BYE) {
-                std::cout << "Client disconnected by request\n";
+                std::cout << "Client disconnected by request\n";//если он написал quit то мы выводим сообщение что он покинул чат
                 break;
             }
         }
