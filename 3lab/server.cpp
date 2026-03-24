@@ -124,7 +124,7 @@ int main() {
         return 1;
     }
 
-    if (::listen(server_sock, 10) < 0) {
+    if (::listen(server_sock, 10) < 0) {//10 — это размер очереди ожидающих подключений. Если 11-й клиент постучится в тот момент когда сервер еще не успел вызвать accept он получит отказ      \  < 0 => сервак не смог перейти в режим ожидания соединений. 
         std::perror("listen");
         ::close(server_sock);
         return 1;
@@ -132,24 +132,24 @@ int main() {
 
     std::cout << "Server listening on port " << SERVER_PORT << "\n";
 
-    pthread_t threads[THREAD_POOL_SIZE];
+    pthread_t threads[THREAD_POOL_SIZE];//массив для хранения идентификаторов потоков pthread_t - обычно какое то большое число 
     for (int i = 0; i < THREAD_POOL_SIZE; ++i) {
-        pthread_create(&threads[i], nullptr, worker_thread, nullptr);
+        pthread_create(&threads[i], nullptr, worker_thread, nullptr);//создаём 10 рабочих потоков и они все засыспают до появиления новых клиентов в worker_thread
     }
 
-    while (true) {
+    while (true) {//основной поток сервера крутится вечно в этом цикле 
         sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
-        int client_sock = ::accept(server_sock, reinterpret_cast<sockaddr*>(&client_addr), &client_len);
-        if (client_sock < 0) {
+        int client_sock = ::accept(server_sock, reinterpret_cast<sockaddr*>(&client_addr), &client_len);//главный поток замирает здесь пока кто-то не подключится. как только клиент пришел accept создает новый отдельный сокет специально для общения с этим клиентом
+        if (client_sock < 0) {//если подключение сорвалось в процессе (клиент передумал) просто идем на следующий круг
             continue;
         }
 
         std::cout << "Connection accepted from " << client_to_string(client_addr) << "\n";
-        pthread_mutex_lock(&queue_mutex);
-        client_queue.push(client_sock);
-        pthread_cond_signal(&queue_cond);
-        pthread_mutex_unlock(&queue_mutex);
+        pthread_mutex_lock(&queue_mutex);//локаем мьютекс
+        client_queue.push(client_sock);//кладем дескриптор нового клиента в std::queue
+        pthread_cond_signal(&queue_cond);//ВОТ ТУТ КАК РАЗ будим спящий поток чтобы он обрабтал клиента 
+        pthread_mutex_unlock(&queue_mutex);//анлокаем мьютекс
     }
 
     ::close(server_sock);
