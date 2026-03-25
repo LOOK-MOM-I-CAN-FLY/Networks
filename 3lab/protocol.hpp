@@ -1,3 +1,4 @@
+#pragma once
 #include <cstdint>    // uint8_t, uint32_t
 #include <cstddef>    // std::size_t
 #include <string>     // std::string
@@ -20,7 +21,7 @@
 // Максимальный размер полезной нагрузки в байтах.
 // Это именно лимит на данные, которые мы готовы передать в payload.
 constexpr std::size_t MAX_PAYLOAD = 1024;
-
+constexpr int SERVER_PORT = 5555;
 // Упаковка структуры без выравнивания.
 // Это нужно, чтобы поля в памяти шли подряд строго в том порядке,
 // в котором мы ожидаем их отправлять и принимать по сети.
