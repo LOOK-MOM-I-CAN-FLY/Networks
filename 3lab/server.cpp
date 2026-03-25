@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <queue>
+#include <string>
 #include <cstring>
 #include <unistd.h>
 #include <pthread.h>
@@ -8,11 +9,12 @@
 
 #include "protocol.hpp"
 
+constexpr int SERVER_PORT = 5555; //порт сервера. Должен совпадать с портом клиента
 constexpr int THREAD_POOL_SIZE = 10;//размер пула рабочий потоков которые будут обрабатывать подключившихся клиентов
-//очередь куда главный поток складывает новые сокеты клиентов откуда потоки будут забирать клиентов 
+//очередь куда главный поток складывает новые сокеты клиентов откуда потоки будут забирать клиентов
 std::queue<int> client_queue;
 pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;//мьютекс для защиты очереди потому что туда могут и писать и читать одновременно несколько потоков
-pthread_cond_t  queue_cond  = PTHREAD_COND_INITIALIZER;// нужно чтобы если очередь была пустой воркер засыпал иначе пробуждался 
+pthread_cond_t  queue_cond  = PTHREAD_COND_INITIALIZER;// нужно чтобы если очередь была пустой воркер засыпал иначе пробуждался
 
 std::vector<int> active_clients;//список активных клиентов, нужен для рассылки сообщений всем подключённым клиентам
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;//и мьютекс для его защиты по той же причине что и для очереди
@@ -23,7 +25,7 @@ std::string client_to_string(const sockaddr_in& addr) {
     return std::string(ip) + ":" + std::to_string(ntohs(addr.sin_port));//ну и выводим просто строку
 }
 //удаляет клиента из списка активных и закрывает его сокет
-void (int sock) {
+void remove_client(int sock) {
     pthread_mutex_lock(&clients_mutex);//захватываем мьютекст
     for (auto it = active_clients.begin(); it != active_clients.end(); ++it) {//ищем пока не найдём
         if (*it == sock) {
@@ -34,13 +36,13 @@ void (int sock) {
     pthread_mutex_unlock(&clients_mutex);//отпускаем мьютекс
 
     ::shutdown(sock, SHUT_RDWR);//мягко сообщеаем ядру что больше не читаем и не пишем в этот сокет
-    ::close(sock);//закрываем дескриптор 
+    ::close(sock);//закрываем дескриптор
 }
 //посылаем сообщения всем активным клиентам не считая того кто это сообщение отправил
 void broadcast_message(const Message& msg, int exclude_sock = -1) {
     pthread_mutex_lock(&clients_mutex);//захватываем мьютекст
 
-    //так как длина состоит из 1 + payload то мы вычитаем 1 
+    //так как длина состоит из 1 + payload то мы вычитаем 1
     const std::size_t payload_len = static_cast<std::size_t>(ntohl(msg.length) - 1u);
     //весь пакет состоит из 4 байт (длина) + 1 байт (типа) + n байт пейлод
     const std::size_t total_size = sizeof(msg.length) + 1u + payload_len;
@@ -55,7 +57,7 @@ void broadcast_message(const Message& msg, int exclude_sock = -1) {
 
 void* worker_thread(void*) {//Она берет клиента из очереди, проверяет его и обслуживает до момента отключения.
     while (true) {
-        int client_sock = -1;//нужно для хранения дескриптора текущего клиента 
+        int client_sock = -1;//нужно для хранения дескриптора текущего клиента
 
         pthread_mutex_lock(&queue_mutex);//захватываем мьютекс так как работает с очередью
         while (client_queue.empty()) {//будем ждать если очередь пуста
@@ -66,17 +68,17 @@ void* worker_thread(void*) {//Она берет клиента из очеред
         pthread_mutex_unlock(&queue_mutex);//отпускаем мьютекс
 
         Message msg;
-        if (!recv_message(client_sock, msg) || msg.type != MSG_HELLO) {//если не получилось получить сообщение от клиента или клиент не прислал hello то бб 
+        if (!recv_message(client_sock, msg) || msg.type != MSG_HELLO) {//если не получилось получить сообщение от клиента или клиент не прислал hello то бб
             remove_client(client_sock);
             continue;
         }
 
-        std::cout << "New client said HELLO: " << msg.payload << "\n";//вывод в консоль текст приветствия от клиента 
+        std::cout << "New client said HELLO: " << msg.payload << "\n";//вывод в консоль текст приветствия от клиента
 
-        send_message(client_sock, MSG_WELCOME, "Welcome to the server!");//и посылаем ответное сообщение клиенту 
+        send_message(client_sock, MSG_WELCOME, "Welcome to the server!");//и посылаем ответное сообщение клиенту
 
         pthread_mutex_lock(&clients_mutex);
-        active_clients.push_back(client_sock);//добавляем новоиспечённого клиента к активным чтобы с ним работать дальше 
+        active_clients.push_back(client_sock);//добавляем новоиспечённого клиента к активным чтобы с ним работать дальше
         pthread_mutex_unlock(&clients_mutex);
 
         while (true) {//цикл жизни конкретного соединения
@@ -104,7 +106,7 @@ void* worker_thread(void*) {//Она берет клиента из очеред
 int main() {
     int server_sock = ::socket(AF_INET, SOCK_STREAM, 0);//AF_INET — работаем через IPv4, SOCK_STREAM — используем протокол TCP         |  :: - означает использование системной функции
     if (server_sock < 0) {
-        std::perror("socket");//если вернулось -1 значит ОС не смогла выделить ресурсы для создания сокета 
+        std::perror("socket");//если вернулось -1 значит ОС не смогла выделить ресурсы для создания сокета
         return 1;
     }
 
@@ -112,7 +114,7 @@ int main() {
     //REUSEADDR - разрешает повторное использование локального адреса и порта сразу после закрытия программы
     ::setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));//крч по сути я говорю ос'ке: Если я перезапущу сервер даь мне занять этот порт немедленно и не заставляй меня ждать пару минут (30 - 120 сек)
 
-    sockaddr_in server_addr{};//создаём структуру куда сложем данные о адресе 
+    sockaddr_in server_addr{};//создаём структуру куда сложем данные о адресе
     server_addr.sin_family = AF_INET;//IPv4
     server_addr.sin_addr.s_addr = INADDR_ANY;// сервак слушает все порты компа
     server_addr.sin_port = htons(SERVER_PORT);//число в сетевой формат
@@ -124,7 +126,7 @@ int main() {
         return 1;
     }
 
-    if (::listen(server_sock, 10) < 0) {//10 — это размер очереди ожидающих подключений. Если 11-й клиент постучится в тот момент когда сервер еще не успел вызвать accept он получит отказ      \  < 0 => сервак не смог перейти в режим ожидания соединений. 
+    if (::listen(server_sock, 10) < 0) {//10 — это размер очереди ожидающих подключений. Если 11-й клиент постучится в тот момент когда сервер еще не успел вызвать accept он получит отказ      \  < 0 => сервак не смог перейти в режим ожидания соединений.
         std::perror("listen");
         ::close(server_sock);
         return 1;
@@ -132,12 +134,12 @@ int main() {
 
     std::cout << "Server listening on port " << SERVER_PORT << "\n";
 
-    pthread_t threads[THREAD_POOL_SIZE];//массив для хранения идентификаторов потоков pthread_t - обычно какое то большое число 
+    pthread_t threads[THREAD_POOL_SIZE];//массив для хранения идентификаторов потоков pthread_t - обычно какое то большое число
     for (int i = 0; i < THREAD_POOL_SIZE; ++i) {
         pthread_create(&threads[i], nullptr, worker_thread, nullptr);//создаём 10 рабочих потоков и они все засыспают до появиления новых клиентов в worker_thread
     }
 
-    while (true) {//основной поток сервера крутится вечно в этом цикле 
+    while (true) {//основной поток сервера крутится вечно в этом цикле
         sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
         int client_sock = ::accept(server_sock, reinterpret_cast<sockaddr*>(&client_addr), &client_len);//главный поток замирает здесь пока кто-то не подключится. как только клиент пришел accept создает новый отдельный сокет специально для общения с этим клиентом
@@ -148,7 +150,7 @@ int main() {
         std::cout << "Connection accepted from " << client_to_string(client_addr) << "\n";
         pthread_mutex_lock(&queue_mutex);//локаем мьютекс
         client_queue.push(client_sock);//кладем дескриптор нового клиента в std::queue
-        pthread_cond_signal(&queue_cond);//ВОТ ТУТ КАК РАЗ будим спящий поток чтобы он обрабтал клиента 
+        pthread_cond_signal(&queue_cond);//ВОТ ТУТ КАК РАЗ будим спящий поток чтобы он обрабтал клиента
         pthread_mutex_unlock(&queue_mutex);//анлокаем мьютекс
     }
 
