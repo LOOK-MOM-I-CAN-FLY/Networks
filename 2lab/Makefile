@@ -3,10 +3,10 @@ CXXFLAGS = -Wall -Wextra -std=c++11 -pthread
 
 all: server client
 
-server: server.cpp protocol.h
+server: server.cpp protocol.hpp
 	$(CXX) $(CXXFLAGS) server.cpp -o server
 
-client: client.cpp protocol.h
+client: client.cpp protocol.hpp
 	$(CXX) $(CXXFLAGS) client.cpp -o client
 
 clean:
