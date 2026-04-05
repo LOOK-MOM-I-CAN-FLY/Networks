@@ -7,22 +7,22 @@
 
 #include "protocol.hpp"
 
-std::atomic<bool> is_connected(false);
+std::atomic<bool> is_connected(false);//потокобезопасная переменная один поток может её менять а другой читать без риска ошибок синхронизации
 
 struct RecvThreadArgs {
-    int sock;
+    int sock;//просто структура для передачи в поток дескр сокета 
 };
-
+//работа отдельного потока на стороне клиента, который постоянно слушает сообщения от сервера
 void* receive_thread(void* arg) {
-    auto* args = static_cast<RecvThreadArgs*>(arg);
-    const int sock = args->sock;
-    delete args;
+    auto* args = static_cast<RecvThreadArgs*>(arg);//приводим войд* к нашей структуре чтобы можно прочитать данные
+    const int sock = args->sock;//копируем номер сокета в локальную переменную
+    delete args;//освобождает память выделенную под структуру аргументов 
 
-    Message msg;
-    while (is_connected.load()) {
-        if (!recv_message(sock, msg)) {
+    Message msg;//сюда записываем сообщения 
+    while (is_connected.load()) {//безопасно читаем значение
+        if (!recv_message(sock, msg)) {//вызывем чтение функции сообщения, если получили фолз то ошибка 
             std::cout << "\n[Server disconnected]\n";
-            is_connected.store(false);
+            is_connected.store(false);//меняем на отключение
             break;
         }
 
