@@ -159,6 +159,117 @@ void broadcast_payload(uint8_t type, const std::string& payload) {      // ра�
     }
 }
 
+void* worker_thread(void*) {                                             // поток, который обрабатывает клиентов из очереди
+    while (true) {                                                       // работаем бесконечно
+        int client_sock = -1;                                            // сюда положим сокет клиента
+
+        pthread_mutex_lock(&queue_mutex);                               // защищаем очередь
+        while (client_queue.empty()) {                                   // пока в очереди никого нет
+            pthread_cond_wait(&queue_cond, &queue_mutex);                // спим и ждём сигнал о новом клиенте
+        }
+        client_sock = client_queue.front();                              // берём первого клиента
+        client_queue.pop();                                              // удаляем его из очереди
+        pthread_mutex_unlock(&queue_mutex);                              // отпускаем мьютекс
+
+        Message msg;                                                     // сюда будем читать сообщения клиента
+        if (!recv_message_osi(client_sock, msg, false) || msg.type != MSG_HELLO) { // ждём первый HELLO
+            remove_client(client_sock);                                  // если не HELLO или ошибка, отключаем клиента
+            continue;                                                    // переходим к следующему клиенту
+        }
+
+        log_layer(7, std::string("handle ") + message_type_name(msg.type)); // логируем обработку сообщения
+        std::cout << "New client said HELLO: " << msg.payload << "\n";      // выводим payload приветствия
+
+        send_message_osi(client_sock, MSG_WELCOME, "Welcome to the server!", "send welcome"); // отправляем приветствие
+
+        bool authenticated = false;                                      // флаг успешной авторизации
+        std::string nickname;                                             // ник клиента
+        while (!authenticated) {                                          // пока клиент не авторизовался
+            if (!recv_message_osi(client_sock, msg, false)) {             // читаем следующее сообщение
+                remove_client(client_sock);                               // если соединение оборвалось, удаляем клиента
+                authenticated = false;                                    // фиксируем неуспех
+                break;                                                    // выходим из цикла авторизации
+            }
+
+            log_layer(7, std::string("handle ") + message_type_name(msg.type)); // показываем тип сообщения
+
+            if (msg.type != MSG_AUTH) {                                   // пока не пришёл AUTH, игнорируем всё остальное
+                log_layer(7, "ignore message until authentication");       // пишем в лог что сообщение пропущено
+                continue;                                                 // ждём дальше
+            }
+
+            nickname = msg.payload;                                       // берём ник из payload
+            if (nickname.empty() || nickname.size() > NICKNAME_MAX_LEN) { // проверяем валидность ника
+                send_message_osi(client_sock, MSG_ERROR, "Invalid nickname", "send auth error"); // отправляем ошибку
+                remove_client(client_sock);                               // отключаем клиента
+                authenticated = false;                                    // авторизация не удалась
+                break;                                                    // выходим
+            }
+
+            if (nickname_exists(nickname)) {                              // проверяем, не занят ли ник
+                send_message_osi(client_sock, MSG_ERROR, "Nickname already in use", "send auth error"); // сообщаем об ошибке
+                remove_client(client_sock);                               // закрываем соединение
+                authenticated = false;                                    // не авторизовали
+                break;                                                    // уходим из цикла
+            }
+
+            add_client(client_sock, nickname);                             // добавляем клиента в список активных
+            log_layer(5, "authentication success");                        // логируем успех авторизации
+
+            std::string info = "User [" + nickname + "] connected";       // сообщение для остальных клиентов
+            broadcast_payload(MSG_SERVER_INFO, info);                      // сообщаем всем о новом подключении
+            authenticated = true;                                          // теперь клиент считается авторизованным
+        }
+
+        if (!authenticated) {                                               // если авторизация не удалась
+            continue;                                                       // берём нового клиента
+        }
+
+        while (true) {                                                      // основной цикл общения с авторизованным клиентом
+            if (!recv_message_osi(client_sock, msg, true)) {                // читаем очередное сообщение
+                break;                                                      // если ошибка чтения, выходим и удаляем клиента
+            }
+
+            log_layer(7, std::string("handle ") + message_type_name(msg.type)); // логируем тип сообщения
+
+            if (msg.type == MSG_TEXT) {                                     // обычное публичное сообщение
+                std::string text = "[" + nickname + "]: " + std::string(msg.payload); // добавляем ник к сообщению
+                broadcast_payload(MSG_TEXT, text);                          // рассылаем всем
+            } else if (msg.type == MSG_PRIVATE) {                           // приватное сообщение
+                std::string payload = msg.payload;                          // копируем payload для разбора
+                std::size_t sep = payload.find(':');                        // ищем разделитель "ник:сообщение"
+                if (sep == std::string::npos || sep == 0 || sep == payload.size() - 1) { // проверяем формат
+                    send_message_osi(client_sock, MSG_ERROR, "Invalid private message format", "send private error"); // ошибка формата
+                    continue;                                               // ждём следующее сообщение
+                }
+
+                std::string target = payload.substr(0, sep);                // ник получателя
+                std::string message = payload.substr(sep + 1);              // само сообщение
+                if (!message.empty() && message[0] == ' ') {                // если после двоеточия стоит пробел
+                    message.erase(0, 1);                                    // убираем его
+                }
+
+                int target_sock = -1;                                       // сюда запишем сокет получателя
+                if (!get_sock_by_nickname(target, target_sock)) {           // ищем получателя по нику
+                    send_message_osi(client_sock, MSG_ERROR, "User [" + target + "] not found", "send private error"); // если нет такого пользователя
+                    continue;                                               // возвращаемся в цикл
+                }
+
+                std::string private_payload = "[PRIVATE][" + nickname + "]: " + message; // формируем приватное сообщение
+                send_message_osi(target_sock, MSG_PRIVATE, private_payload, "send private message"); // отправляем адресату
+            } else if (msg.type == MSG_PING) {                               // если клиент прислал ping
+                send_message_osi(client_sock, MSG_PONG, "", "send pong");   // отвечаем pong
+            } else if (msg.type == MSG_BYE) {                                // если клиент хочет завершить соединение
+                std::cout << "Client disconnected by request\n";            // пишем в лог
+                break;                                                       // выходим из цикла общения
+            }
+        }
+
+        remove_client(client_sock);                                         // после выхода из цикла удаляем клиента и закрываем сокет
+    }
+
+    return nullptr;                                                         // завершаем поток
+}
 
 int main() {
     int server_sock = ::socket(AF_INET, SOCK_STREAM, 0);                    // создаём TCP-сокет IPv4
