@@ -355,7 +355,7 @@ int main() {
         pthread_mutex_unlock(&queue_mutex);                                 // отпускаем мьютекс
     }
 
-    ::close(server_sock);                                                    // закрываем серверный сокет перед выходом
+    ::close(server_sock);                                                    // закрываем серверный сокет перед 
     return 0;                                                                // завершаем программу
 }
 
