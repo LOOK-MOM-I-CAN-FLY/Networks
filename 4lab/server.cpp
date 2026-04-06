@@ -127,4 +127,36 @@ bool get_nickname_by_sock(int sock, std::string& nickname) {            // ищ�
     return false;                                                       // клиента с таким сокетом нет
 }
 
+void remove_client(int sock) {                                          // удаляем клиента из списка и закрываем его сокет
+    std::string nickname;                                               // сюда сохраним ник, если найдём клиента
+    bool had_nickname = false;                                           // флаг, нашли ли клиента вообще
+
+    pthread_mutex_lock(&clients_mutex);                                 // защищаем список активных клиентов
+    for (auto it = active_clients.begin(); it != active_clients.end(); ++it) { // ищем клиента по сокету
+        if (it->sock == sock) {                                         // если нашли
+            nickname = it->nickname;                                    // сохраняем ник для логов и рассылки
+            had_nickname = true;                                        // отмечаем что клиент был найден
+            active_clients.erase(it);                                   // удаляем его из списка
+            break;                                                      // выходим из цикла
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);                               // отпускаем мьютекс
+
+    if (had_nickname) {                                                  // если клиент реально был в списке
+        std::string info = "User [" + nickname + "] disconnected";      // формируем информационное сообщение
+        for (int client_sock : snapshot_client_sockets()) {             // берём список сокетов остальных клиентов
+            send_message_osi(client_sock, MSG_SERVER_INFO, info, "broadcast server info"); // сообщаем о отключении
+        }
+    }
+
+    ::shutdown(sock, SHUT_RDWR);                                         // запрещаем чтение и запись на сокете
+    ::close(sock);                                                       // закрываем сокет окончательно
+}
+
+void broadcast_payload(uint8_t type, const std::string& payload) {      // рассылаем сообщение всем клиентам
+    for (int client_sock : snapshot_client_sockets()) {                 // получаем список текущих сокетов
+        send_message_osi(client_sock, type, payload, "broadcast message"); // отправляем каждому
+    }
+}
+
 
