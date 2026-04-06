@@ -160,3 +160,56 @@ void broadcast_payload(uint8_t type, const std::string& payload) {      // ра�
 }
 
 
+int main() {
+    int server_sock = ::socket(AF_INET, SOCK_STREAM, 0);                    // создаём TCP-сокет IPv4
+    if (server_sock < 0) {                                                  // проверяем, создался ли сокет
+        std::perror("socket");                                              // выводим системную ошибку
+        return 1;                                                           // завершаем программу с ошибкой
+    }
+
+    int opt = 1;                                                            // значение для включения повторного использования адреса
+    ::setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)); // разрешаем быстро перезапускать сервер
+
+    sockaddr_in server_addr{};                                              // структура адреса сервера
+    server_addr.sin_family = AF_INET;                                       // указываем IPv4
+    server_addr.sin_addr.s_addr = INADDR_ANY;                               // принимаем соединения на все адреса
+    server_addr.sin_port = htons(SERVER_PORT);                              // задаём порт сервера в сетевом порядке байт
+    if (::bind(server_sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) { // привязываем сокет к порту
+        std::perror("bind");                                                // выводим ошибку
+        ::close(server_sock);                                               // закрываем сокет
+        return 1;                                                           // выходим
+    }
+
+    if (::listen(server_sock, 10) < 0) {                                    // переводим сокет в режим прослушивания
+        std::perror("listen");                                             // показываем ошибку, если listen не сработал
+        ::close(server_sock);                                               // закрываем сокет
+        return 1;                                                           // выходим
+    }
+
+    std::cout << "Server listening on port " << SERVER_PORT << "\n";       // сообщаем, что сервер запущен
+
+    pthread_t threads[THREAD_POOL_SIZE];                                     // массив идентификаторов потоков
+    for (int i = 0; i < THREAD_POOL_SIZE; ++i) {                            // создаём нужное количество рабочих потоков
+        pthread_create(&threads[i], nullptr, worker_thread, nullptr);       // запускаем поток, который будет обслуживать клиентов
+    }
+
+    while (true) {                                                           // главный цикл сервера
+        sockaddr_in client_addr{};                                           // адрес подключившегося клиента
+        socklen_t client_len = sizeof(client_addr);                          // размер структуры адреса
+        int client_sock = ::accept(server_sock, reinterpret_cast<sockaddr*>(&client_addr), &client_len); // принимаем новое соединение
+        if (client_sock < 0) {                                              // если accept вернул ошибку
+            continue;                                                       // просто ждём следующее подключение
+        }
+
+        std::cout << "Connection accepted from " << client_to_string(client_addr) << "\n"; // выводим адрес клиента
+        pthread_mutex_lock(&queue_mutex);                                   // защищаем очередь клиентов
+        client_queue.push(client_sock);                                     // кладём сокет в очередь на обработку
+        pthread_cond_signal(&queue_cond);                                   // будим один из спящих рабочих потоков
+        pthread_mutex_unlock(&queue_mutex);                                 // отпускаем мьютекс
+    }
+
+    ::close(server_sock);                                                    // закрываем серверный сокет перед выходом
+    return 0;                                                                // завершаем программу
+}
+
+
