@@ -127,3 +127,4 @@ bool get_nickname_by_sock(int sock, std::string& nickname) {            // ищ�
     return false;                                                       // клиента с таким сокетом нет
 }
 
+
