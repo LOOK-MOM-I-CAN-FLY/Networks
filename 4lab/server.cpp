@@ -163,6 +163,19 @@ bool get_nickname_by_sock(int sock, std::string& nickname) {            // ищ�
     return false;                                                       // клиента с таким сокетом нет
 }
 
+bool get_sock_by_nickname(const std::string& nickname, int& sock_out) { 
+    pthread_mutex_lock(&clients_mutex); 
+    for (const auto& client : active_clients) { 
+        if (nickname == client.nickname) { 
+            sock_out = client.sock; 
+            pthread_mutex_unlock(&clients_mutex); 
+            return true; 
+        } 
+    } 
+    pthread_mutex_unlock(&clients_mutex); 
+    return false; 
+}
+
 void remove_client(int sock) {                                          // удаляем клиента из списка и закрываем его сокет
     std::string nickname;                                               // сюда сохраним ник, если найдём клиента
     bool had_nickname = false;                                           // флаг, нашли ли клиента вообще
