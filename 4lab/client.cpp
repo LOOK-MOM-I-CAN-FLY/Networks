@@ -30,7 +30,7 @@ void* receive_thread(void* arg) {
             std::cout << msg.payload << "\n";//обычное сообщение в чат
         } else if (msg.type == MSG_PRIVATE) {
             std::cout << msg.payload << "\n";//приватное сообщение
-        } else if (msg.type == MSG_SERVER_INFO) 
+        } else if (msg.type == MSG_SERVER_INFO) {
             std::cout << "[SERVER]: " << msg.payload << "\n";//инфо от сервера
         } else if (msg.type == MSG_ERROR) {
             std::cout << "[SERVER]: " << msg.payload << "\n";//ошибка от сервера
