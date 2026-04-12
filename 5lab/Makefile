@@ -10,4 +10,4 @@ client: client.cpp protocol.hpp
 	$(CXX) $(CXXFLAGS) -o client client.cpp
 
 clean:
-	rm -f server client
+	rm -rf server client
