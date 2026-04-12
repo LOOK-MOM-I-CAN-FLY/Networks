@@ -13,7 +13,8 @@ constexpr int SERVER_PORT = 5555;
 
 constexpr std::size_t MAX_NAME = 32;
 constexpr std::size_t MAX_PAYLOAD = 256;
-
+// Перечень типов сообщений.
+// Это просто удобные имена для чисел, чтобы не писать "1", "2", "3" и т.д.
 enum MessageType : std::uint8_t {
     MSG_HELLO        = 1,
     MSG_WELCOME      = 2,
@@ -65,15 +66,29 @@ inline bool send_all(int sock, const void* data, std::size_t size) {
 }
 
 inline bool recv_all(int sock, void* data, std::size_t size) {
+    // Приводим буфер к байтовому указателю для поэтапного чтения.
     char* ptr = static_cast<char*>(data);
+
+    // Пока остались байты для чтения, продолжаем принимать данные.
     while (size > 0) {
-        ssize_t recvd = ::recv(sock, ptr, size, 0);
-        if (recvd <= 0) {
+        // ::recv() — системный вызов POSIX.
+        // Он читает данные из TCP-стрима, но тоже может вернуть только часть.
+        //ptr - куда recv должен записать принятые данные
+        ssize_t received = ::recv(sock, ptr, size, 0);// 0 -> MSG_PEEK позволяет "подсмотреть" данные, не удаляя их из системного буфера.
+
+        // received <= 0 означает либо ошибку, либо закрытие соединения.
+        if (received <= 0) {
             return false;
         }
-        ptr += static_cast<std::size_t>(recvd);
-        size -= static_cast<std::size_t>(recvd);
+
+        // Двигаем указатель на количество реально принятых байт.
+        ptr += static_cast<std::size_t>(received);
+
+        // Уменьшаем число оставшихся байт.
+        size -= static_cast<std::size_t>(received);
     }
+
+    // Если цикл завершился, значит буфер заполнен полностью.
     return true;
 }
 
