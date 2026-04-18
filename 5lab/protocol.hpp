@@ -9,10 +9,16 @@
 #include <string>
 #include <sys/socket.h>  // send/recv
 
+// Порт, на котором по умолчанию работает сервер.
 constexpr int SERVER_PORT = 5555;
 
+// Максимальная длина имени отправителя/получателя.
+// +1 в структурах не нужен, потому что нуль-терминатор кладём вручную.
 constexpr std::size_t MAX_NAME = 32;
+
+// Максимальный размер полезной нагрузки сообщения.
 constexpr std::size_t MAX_PAYLOAD = 256;
+
 // Перечень типов сообщений.
 // Это просто удобные имена для чисел, чтобы не писать "1", "2", "3" и т.д.
 enum MessageType : std::uint8_t {
@@ -32,6 +38,8 @@ enum MessageType : std::uint8_t {
     MSG_HELP         = 14
 };
 
+// Возвращает строковое имя типа сообщения.
+// Используется для отладки, логов и удобного вывода в консоль.
 inline const char* message_type_name(std::uint8_t type) {
     switch (type) {
         case MSG_HELLO: return "MSG_HELLO";
@@ -52,6 +60,8 @@ inline const char* message_type_name(std::uint8_t type) {
     }
 }
 
+// Отправляет весь буфер целиком.
+// Так как send() может отправить не все байты за один вызов, делаем цикл.
 inline bool send_all(int sock, const void* data, std::size_t size) {
     const char* ptr = static_cast<const char*>(data);
     while (size > 0) {
@@ -65,6 +75,8 @@ inline bool send_all(int sock, const void* data, std::size_t size) {
     return true;
 }
 
+// Принимает ровно size байт из сокета.
+// Если recv() вернул меньше данных, продолжаем чтение до заполнения буфера.
 inline bool recv_all(int sock, void* data, std::size_t size) {
     // Приводим буфер к байтовому указателю для поэтапного чтения.
     char* ptr = static_cast<char*>(data);
@@ -73,8 +85,8 @@ inline bool recv_all(int sock, void* data, std::size_t size) {
     while (size > 0) {
         // ::recv() — системный вызов POSIX.
         // Он читает данные из TCP-стрима, но тоже может вернуть только часть.
-        //ptr - куда recv должен записать принятые данные
-        ssize_t received = ::recv(sock, ptr, size, 0);// 0 -> MSG_PEEK позволяет "подсмотреть" данные, не удаляя их из системного буфера.
+        // ptr - куда recv должен записать принятые данные
+        ssize_t received = ::recv(sock, ptr, size, 0); // 0 -> обычный режим чтения.
 
         // received <= 0 означает либо ошибку, либо закрытие соединения.
         if (received <= 0) {
@@ -92,6 +104,8 @@ inline bool recv_all(int sock, void* data, std::size_t size) {
     return true;
 }
 
+// Перевод 64-битного числа из порядка хоста в сетевой порядок байт.
+// Нужен, потому что стандартные htonl/ntohl работают только с 32 битами.
 inline std::uint64_t htonll(std::uint64_t value) {
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
     return (static_cast<std::uint64_t>(htonl(static_cast<std::uint32_t>(value & 0xFFFFFFFFULL))) << 32) |
@@ -101,6 +115,7 @@ inline std::uint64_t htonll(std::uint64_t value) {
 #endif
 }
 
+// Перевод 64-битного числа из сетевого порядка байт в порядок хоста.
 inline std::uint64_t ntohll(std::uint64_t value) {
 #if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
     return (static_cast<std::uint64_t>(ntohl(static_cast<std::uint32_t>(value & 0xFFFFFFFFULL))) << 32) |
@@ -110,31 +125,38 @@ inline std::uint64_t ntohll(std::uint64_t value) {
 #endif
 }
 
+// Внутренняя структура сообщения в памяти программы.
+// Здесь payload хранится уже в удобном виде, как строка.
 struct MessageEx {
-    std::uint32_t length;  // длина payload (в байтах)
-    std::uint8_t type;
-    std::uint32_t msg_id;
-    char sender[MAX_NAME];
-    char receiver[MAX_NAME];
-    std::int64_t timestamp;  // unix time
-    char payload[MAX_PAYLOAD + 1];
+    std::uint32_t length;       // длина payload (в байтах)
+    std::uint8_t type;          // тип сообщения
+    std::uint32_t msg_id;       // идентификатор сообщения
+    char sender[MAX_NAME];      // имя отправителя
+    char receiver[MAX_NAME];    // имя получателя
+    std::int64_t timestamp;     // unix time
+    char payload[MAX_PAYLOAD + 1]; // данные сообщения + '\0'
 };
 
+// Структура заголовка сообщения для передачи по сети.
+// Используем #pragma pack(1), чтобы компилятор не добавлял паддинг.
 #pragma pack(push, 1)
 struct MessageExWireHeader {
     std::uint32_t length;     // network order, payload bytes
-    std::uint8_t type;
+    std::uint8_t type;        // тип сообщения
     std::uint32_t msg_id;     // network order
-    char sender[MAX_NAME];
-    char receiver[MAX_NAME];
+    char sender[MAX_NAME];    // имя отправителя
+    char receiver[MAX_NAME];  // имя получателя
     std::uint64_t timestamp;  // network order
 };
 #pragma pack(pop)
 
+// Сбрасывает структуру сообщения в нули.
+// Это удобно перед заполнением новых данных.
 inline void message_ex_clear(MessageEx& msg) {
     std::memset(&msg, 0, sizeof(msg));
 }
 
+// Форматирует unix timestamp в строку вида YYYY-MM-DD HH:MM:SS.
 inline std::string format_timestamp(std::int64_t ts) {
     std::time_t t = static_cast<std::time_t>(ts);
     std::tm tm{};
@@ -151,6 +173,9 @@ inline std::string format_timestamp(std::int64_t ts) {
     return std::string(buf);
 }
 
+// Отправляет сообщение в сетевом формате.
+// Сначала отправляется заголовок, затем payload.
+// Длина payload ограничивается MAX_PAYLOAD.
 inline bool send_message_ex(
     int sock,
     std::uint8_t type,
@@ -160,63 +185,97 @@ inline bool send_message_ex(
     std::int64_t timestamp,
     const std::string& payload) {
 
+    // Ограничиваем размер полезной нагрузки, чтобы не выйти за пределы буфера.
     std::uint32_t payload_len = std::min<std::uint32_t>(
         static_cast<std::uint32_t>(payload.size()),
         static_cast<std::uint32_t>(MAX_PAYLOAD));
 
+    // Формируем заголовок сообщения.
     MessageExWireHeader header{};
     header.length = htonl(payload_len);
     header.type = type;
     header.msg_id = htonl(msg_id);
+
+    // Обнуляем поля фиксированного размера перед копированием строк.
     std::memset(header.sender, 0, sizeof(header.sender));
     std::memset(header.receiver, 0, sizeof(header.receiver));
+
+    // Копируем строки не длиннее допустимого размера.
     if (!sender.empty()) {
         std::strncpy(header.sender, sender.c_str(), sizeof(header.sender) - 1);
     }
     if (!receiver.empty()) {
         std::strncpy(header.receiver, receiver.c_str(), sizeof(header.receiver) - 1);
     }
+
+    // Переводим timestamp в сетевой порядок байт.
     header.timestamp = htonll(static_cast<std::uint64_t>(timestamp));
 
+    // Отправляем заголовок целиком.
     if (!send_all(sock, &header, sizeof(header))) {
         return false;
     }
+
+    // Если полезной нагрузки нет, на этом передача заканчивается.
     if (payload_len == 0) {
         return true;
     }
+
+    // Отправляем payload отдельно.
     return send_all(sock, payload.data(), payload_len);
 }
 
+// Принимает сообщение из сокета и заполняет структуру MessageEx.
+// Сначала читается заголовок, затем payload нужной длины.
 inline bool recv_message_ex(int sock, MessageEx& msg) {
+    // Очищаем структуру перед заполнением.
     message_ex_clear(msg);
 
+    // Буфер для сетевого заголовка.
     MessageExWireHeader header{};
+
+    // Сначала читаем длину payload отдельно.
     if (!recv_all(sock, &header.length, sizeof(header.length))) {
         return false;
     }
+
+    // Затем читаем оставшуюся часть заголовка.
     if (!recv_all(sock, &header.type, sizeof(header) - sizeof(header.length))) {
         return false;
     }
 
+    // Переводим длину из сетевого порядка байт в порядок хоста.
     std::uint32_t payload_len = ntohl(header.length);
+
+    // Защита от слишком большого сообщения.
     if (payload_len > MAX_PAYLOAD) {
         return false;
     }
 
+    // Заполняем поля внутренней структуры.
     msg.length = payload_len;
     msg.type = header.type;
     msg.msg_id = ntohl(header.msg_id);
+
+    // Копируем имена отправителя и получателя.
     std::memcpy(msg.sender, header.sender, sizeof(msg.sender));
     std::memcpy(msg.receiver, header.receiver, sizeof(msg.receiver));
+
+    // Гарантируем, что строки завершены нулевым символом.
     msg.sender[MAX_NAME - 1] = '\0';
     msg.receiver[MAX_NAME - 1] = '\0';
+
+    // Переводим timestamp обратно из сетевого порядка.
     msg.timestamp = static_cast<std::int64_t>(ntohll(header.timestamp));
 
+    // Если payload есть, читаем его из сокета.
     if (payload_len > 0) {
         if (!recv_all(sock, msg.payload, payload_len)) {
             return false;
         }
     }
+
+    // Завершаем строку нулём, чтобы payload можно было удобно выводить как C-строку.
     msg.payload[payload_len] = '\0';
     return true;
 }
