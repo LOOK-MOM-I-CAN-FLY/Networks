@@ -10,7 +10,7 @@
 #include <unordered_map>     
 #include <vector>             
 
-#include <arpa/inet.h>          // сетевые функции ipv4
+#include <arpa/inet.h>         
 #include <netinet/in.h>         // структуры адресов сети
 #include <pthread.h>            // потоки pthread
 #include <sys/socket.h>         // сокеты
