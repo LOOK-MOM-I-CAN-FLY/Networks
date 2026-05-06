@@ -588,6 +588,47 @@ int main(int argc, char* argv[]) {
         std::cout << "[SERVER]: " << welcome.payload << "\n";
         (void)send_message_ex(sock, MSG_AUTH, 0, nickname, "", std::time(nullptr), nickname);
 
+        {
+            bool auth_ok = false;
+            while (true) {
+                MessageEx auth_resp{};
+                if (!recv_message_ex(sock, auth_resp)) {
+                    break;
+                }
+                if (auth_resp.type == MSG_WELCOME) {
+                    std::cout << "[SERVER]: " << auth_resp.payload << "\n";
+                    auth_ok = true;
+                    break;
+                }
+                if (auth_resp.type == MSG_ERROR) {
+                    std::cout << "[SERVER]: " << auth_resp.payload << "\n";
+                    std::string new_nick;
+                    while (new_nick.empty()) {
+                        std::cout << "Enter new nickname: ";
+                        if (!std::getline(std::cin, new_nick)) {
+                            is_connected.store(false);
+                            ::close(sock);
+                            return 0;
+                        }
+                        if (new_nick.empty()) {
+                            std::cout << "Nickname cannot be empty.\n";
+                        }
+                    }
+                    if (new_nick.size() >= MAX_NAME) {
+                        new_nick.resize(MAX_NAME - 1);
+                    }
+                    nickname = new_nick;
+                    (void)send_message_ex(sock, MSG_AUTH, 0, nickname, "", std::time(nullptr), nickname);
+                }
+            }
+            if (!auth_ok) {
+                is_connected.store(false);
+                ::close(sock);
+                sleep(2);
+                continue;
+            }
+        }
+
         pthread_t recv_tid{};
         auto* r_args = new RecvThreadArgs{sock};
         pthread_create(&recv_tid, nullptr, receive_thread, r_args);
