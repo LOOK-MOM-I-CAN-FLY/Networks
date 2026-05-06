@@ -800,20 +800,19 @@ void* worker_thread(void*) {
             if (nickname.empty() || nickname.size() > NICKNAME_MAX_LEN) {
                 (void)send_message_tcpip(client_sock, MSG_ERROR, 0, "SERVER", "", std::time(nullptr),
                                          "Invalid nickname", "send auth error");
-                close_client_socket(client_sock);
-                authenticated = false;
-                break;
+                continue;
             }
             if (nickname_exists(nickname)) {
                 (void)send_message_tcpip(client_sock, MSG_ERROR, 0, "SERVER", "", std::time(nullptr),
                                          "Nickname already in use", "send auth error");
-                close_client_socket(client_sock);
-                authenticated = false;
-                break;
+                continue;
             }
 
             add_client(client_sock, nickname);
             authenticated = true;
+
+            (void)send_message_tcpip(client_sock, MSG_WELCOME, 0, "SERVER", "", std::time(nullptr),
+                                     "Authenticated as " + nickname, "send auth ok");
 
             const std::string info = "User [" + nickname + "] connected";
             broadcast_message(MSG_SERVER_INFO, 0, "SERVER", "", std::time(nullptr), info, "broadcast server info");
